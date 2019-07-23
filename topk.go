@@ -22,6 +22,7 @@ import (
 	"container/heap"
 	"encoding/gob"
 	"sort"
+	"strings"
 
 	"github.com/liuzl/go-sip13"
 )
@@ -29,6 +30,7 @@ import (
 // Element is a TopK item
 type Element struct {
 	Key   string
+	Items []string
 	Count int
 	Error int
 }
@@ -142,7 +144,7 @@ func (s *Stream) Insert(x string, count int) Element {
 
 	// we're not longer monitoring minKey
 	delete(s.k.m, minKey)
-	// but 'x' is as array position 0
+	// but 'x' is as tokensay position 0
 	s.k.m[x] = 0
 
 	heap.Fix(&s.k, 0)
@@ -207,4 +209,60 @@ func (s *Stream) GobDecode(b []byte) error {
 		return err
 	}
 	return nil
+}
+
+// InsertTokens adds an element to the stream to be tracked
+// It returns an estimation for the just inserted element
+func (s *Stream) InsertTokens(tokens []string, count int) Element {
+	x := strings.Join(tokens, "")
+	xhash := reduce(sip13.Sum64Str(0, 0, x), len(s.alphas))
+
+	// are we tracking this element?
+	if idx, ok := s.k.m[x]; ok {
+		s.k.elts[idx].Count += count
+		e := s.k.elts[idx]
+		heap.Fix(&s.k, idx)
+		return e
+	}
+
+	// can we track more elements?
+	if len(s.k.elts) < s.n {
+		// there is free space
+		e := Element{Key: x, Items: tokens, Count: count}
+		heap.Push(&s.k, e)
+		return e
+	}
+
+	if s.alphas[xhash]+count < s.k.elts[0].Count {
+		e := Element{
+			Key:   x,
+			Items: tokens,
+			Error: s.alphas[xhash],
+			Count: s.alphas[xhash] + count,
+		}
+		s.alphas[xhash] += count
+		return e
+	}
+
+	// replace the current minimum element
+	minKey := s.k.elts[0].Key
+
+	mkhash := reduce(sip13.Sum64Str(0, 0, minKey), len(s.alphas))
+	s.alphas[mkhash] = s.k.elts[0].Count
+
+	e := Element{
+		Key:   x,
+		Items: tokens,
+		Error: s.alphas[xhash],
+		Count: s.alphas[xhash] + count,
+	}
+	s.k.elts[0] = e
+
+	// we're not longer monitoring minKey
+	delete(s.k.m, minKey)
+	// but 'x' is as tokensay position 0
+	s.k.m[x] = 0
+
+	heap.Fix(&s.k, 0)
+	return e
 }
